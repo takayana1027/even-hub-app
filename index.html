@@ -38,22 +38,12 @@
 </div>
 
 <script>
-// ==========================================
-  // 【設定箇所】ここに取得したキーを貼り付けます
-  // ==========================================
-  const API_KEY = 'AIzaSyAD_hguxSy00WhV_qc9iZ6WLf14l8gYkUM';
+  // クライアントIDのみで安全に通信（APIキー不要版）
   const CLIENT_ID = '162909982456-9oocq2tnj9qfr69g75ghs8cgba0q1ali.apps.googleusercontent.com';
-  // ==========================================
-
-  const DISCOVERY_DOCS = [
-    "https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest",
-    "https://www.googleapis.com/discovery/v1/apis/tasks/v1/rest"
-  ];
   const SCOPES = "https://www.googleapis.com/auth/calendar.readonly https://www.googleapis.com/auth/tasks";
 
   let tokenClient;
-  let gapiInited = false;
-  let gisInited = false;
+  let accessToken = null;
   let schedules = [];
   let todos = [];
   let currentMode = "LIST";
@@ -62,20 +52,6 @@
   function setStatus(msg) {
     const el = document.getElementById('status-msg');
     if (el) el.innerText = msg;
-  }
-
-  function gapiLoaded() {
-    gapi.load('client', initializeGapiClient);
-  }
-
-  async function initializeGapiClient() {
-    try {
-      await gapi.client.init({ apiKey: API_KEY, discoveryDocs: DISCOVERY_DOCS });
-      gapiInited = true;
-      maybeEnableButtons();
-    } catch (err) {
-      setStatus("APIキーエラー:\n" + (err.result ? err.result.error.message : JSON.stringify(err)));
-    }
   }
 
   function gisLoaded() {
@@ -88,24 +64,16 @@
             setStatus("ログインエラー: " + JSON.stringify(resp));
             return;
           }
-          // 取得したアクセストークンをGAPIに明示的にセット
-          gapi.client.setToken(resp);
+          accessToken = resp.access_token;
           document.getElementById('auth-btn').style.display = 'none';
           setStatus("予定とToDoを読み込み中...");
           await fetchData();
         },
       });
-      gisInited = true;
-      maybeEnableButtons();
-    } catch (err) {
-      setStatus("クライアントIDエラー:\n" + err.message);
-    }
-  }
-
-  function maybeEnableButtons() {
-    if (gapiInited && gisInited) {
       document.getElementById('auth-btn').style.display = 'block';
       setStatus("上の「Googleログイン」を押してください");
+    } catch (err) {
+      setStatus("初期化エラー:\n" + err.message);
     }
   }
 
@@ -116,31 +84,27 @@
 
   async function fetchData() {
     let errors = [];
+    const headers = { 'Authorization': 'Bearer ' + accessToken };
+
     // 1. カレンダー取得
     try {
-      const calResponse = await gapi.client.calendar.events.list({
-        'calendarId': 'primary',
-        'timeMin': (new Date()).toISOString(),
-        'showDeleted': false,
-        'singleEvents': true,
-        'maxResults': 4,
-        'orderBy': 'startTime'
-      });
-      schedules = (calResponse.result.items || []).map(i => i.summary || '予定あり');
+      const timeMin = encodeURIComponent((new Date()).toISOString());
+      const calRes = await fetch(`https://www.googleapis.com/calendar/v3/calendars/primary/events?timeMin=${timeMin}&showDeleted=false&singleEvents=true&maxResults=4&orderBy=startTime`, { headers });
+      const calData = await calRes.json();
+      if (!calRes.ok) throw new Error(calData.error ? calData.error.message : 'Calendar HTTP Error');
+      schedules = (calData.items || []).map(i => i.summary || '予定あり');
     } catch (err) {
-      errors.push("カレンダー取得失敗: " + (err.result ? err.result.error.message : err.message));
+      errors.push("カレンダー取得失敗: " + err.message);
     }
 
     // 2. ToDo取得
     try {
-      const taskResponse = await gapi.client.tasks.tasks.list({
-        'tasklist': '@default',
-        'showCompleted': false,
-        'maxResults': 4
-      });
-      todos = taskResponse.result.items ? taskResponse.result.items : [];
+      const taskRes = await fetch(`https://tasks.googleapis.com/tasks/v1/lists/@default/tasks?showCompleted=false&maxResults=4`, { headers });
+      const taskData = await taskRes.json();
+      if (!taskRes.ok) throw new Error(taskData.error ? taskData.error.message : 'Tasks HTTP Error');
+      todos = taskData.items ? taskData.items : [];
     } catch (err) {
-      errors.push("ToDo取得失敗: " + (err.result ? err.result.error.message : err.message));
+      errors.push("ToDo取得失敗: " + err.message);
     }
 
     if (errors.length > 0) {
@@ -186,8 +150,15 @@
       if(cursorIndex === 0) { currentMode = "MEMO"; render(); }
       else if(cursorIndex > schedules.length) {
         let task = todos[cursorIndex - 1 - schedules.length];
-        if (task) {
-          gapi.client.tasks.tasks.update({ tasklist: '@default', task: task.id, resource: { id: task.id, status: 'completed' } }).then(() => {
+        if (task && accessToken) {
+          fetch(`https://tasks.googleapis.com/tasks/v1/lists/@default/tasks/${task.id}`, {
+            method: 'PATCH',
+            headers: {
+              'Authorization': 'Bearer ' + accessToken,
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ status: 'completed' })
+          }).then(() => {
             todos.splice(cursorIndex - 1 - schedules.length, 1);
             render();
           });
@@ -206,8 +177,6 @@
     document.getElementById('clock').innerText = `${d.getMonth()+1}/${d.getDate()} ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
   }, 1000);
 </script>
-<!-- 重複していた上部スクリプトを削除し、下部1箇所のみに統一 -->
-<script async defer src="https://apis.google.com/js/api.js" onload="gapiLoaded()"></script>
 <script async defer src="https://accounts.google.com/gsi/client" onload="gisLoaded()"></script>
 </body>
 </html>
