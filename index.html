@@ -19,7 +19,7 @@
   .item.selected { border-left: 3px solid #00FF66; background-color: rgba(0, 255, 102, 0.15); font-weight: bold; }
   .section-title { font-size: 12px; color: #88ffaa; margin-top: 6px; border-bottom: 1px solid #00FF66; }
   #memo-view { display: none; white-space: pre-wrap; line-height: 1.4; }
-  #auth-btn { background: #00FF66; color: #000; padding: 10px; border: none; font-weight: bold; border-radius: 4px; display: none; cursor: pointer; }
+  #auth-btn { background: #00FF66; color: #000; padding: 10px; border: none; font-weight: bold; border-radius: 4px; cursor: pointer; }
   #status-msg { font-size: 13px; color: #ffcc00; margin-top: 8px; white-space: pre-wrap; line-height: 1.4; }
 </style>
 </head>
@@ -30,19 +30,18 @@
     <div id="clock">--/-- --:--</div>
   </div>
   <div id="right-panel">
-    <button id="auth-btn" onclick="handleAuthClick()">Googleログイン</button>
-    <div id="status-msg">初期化中...</div>
+    <button id="auth-btn" onclick="handleAuthClick()">Googleログイン (v2)</button>
+    <div id="status-msg"></div>
     <div id="list-view"></div>
     <div id="memo-view"></div>
   </div>
 </div>
 
 <script>
-  // クライアントIDのみで安全に通信（APIキー不要版）
   const CLIENT_ID = '162909982456-9oocq2tnj9qfr69g75ghs8cgba0q1ali.apps.googleusercontent.com';
-  const SCOPES = "https://www.googleapis.com/auth/calendar.readonly https://www.googleapis.com/auth/tasks";
+  const REDIRECT_URI = 'https://takayana1027.github.io/even-hub-app/';
+  const SCOPES = 'https://www.googleapis.com/auth/calendar.readonly https://www.googleapis.com/auth/tasks';
 
-  let tokenClient;
   let accessToken = null;
   let schedules = [];
   let todos = [];
@@ -54,64 +53,52 @@
     if (el) el.innerText = msg;
   }
 
-  function gisLoaded() {
-    try {
-      tokenClient = google.accounts.oauth2.initTokenClient({
-        client_id: CLIENT_ID,
-        scope: SCOPES,
-        callback: async (resp) => {
-          if (resp.error !== undefined) {
-            setStatus("ログインエラー: " + JSON.stringify(resp));
-            return;
-          }
-          accessToken = resp.access_token;
-          document.getElementById('auth-btn').style.display = 'none';
-          setStatus("予定とToDoを読み込み中...");
-          await fetchData();
-        },
-      });
-      document.getElementById('auth-btn').style.display = 'block';
-      setStatus("上の「Googleログイン」を押してください");
-    } catch (err) {
-      setStatus("初期化エラー:\n" + err.message);
-    }
+  function handleAuthClick() {
+    setStatus("Googleのログイン画面へ移動しています...");
+    const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${CLIENT_ID}&redirect_uri=${encodeURIComponent(REDIRECT_URI)}&response_type=token&scope=${encodeURIComponent(SCOPES)}&prompt=consent`;
+    window.location.href = authUrl;
   }
 
-  function handleAuthClick() {
-    setStatus("別ウィンドウでログイン中...\n一番下までスクロールして「続行」を押してください。");
-    tokenClient.requestAccessToken({prompt: 'consent'});
-  }
+  window.onload = async () => {
+    const hash = window.location.hash.substring(1);
+    const params = new URLSearchParams(hash);
+    if (params.has('access_token')) {
+      accessToken = params.get('access_token');
+      window.history.replaceState({}, document.title, window.location.pathname);
+      document.getElementById('auth-btn').style.display = 'none';
+      setStatus("予定とToDoを読み込み中...");
+      await fetchData();
+    } else if (params.has('error')) {
+      setStatus("ログインエラー: " + params.get('error'));
+    } else {
+      setStatus("上の「Googleログイン (v2)」を押してください");
+    }
+  };
 
   async function fetchData() {
     let errors = [];
     const headers = { 'Authorization': 'Bearer ' + accessToken };
 
-    // 1. カレンダー取得
     try {
       const timeMin = encodeURIComponent((new Date()).toISOString());
       const calRes = await fetch(`https://www.googleapis.com/calendar/v3/calendars/primary/events?timeMin=${timeMin}&showDeleted=false&singleEvents=true&maxResults=4&orderBy=startTime`, { headers });
       const calData = await calRes.json();
-      if (!calRes.ok) throw new Error(calData.error ? calData.error.message : 'Calendar HTTP Error');
+      if (!calRes.ok) throw new Error(calData.error ? calData.error.message : 'Calendar Error');
       schedules = (calData.items || []).map(i => i.summary || '予定あり');
     } catch (err) {
       errors.push("カレンダー取得失敗: " + err.message);
     }
 
-    // 2. ToDo取得
     try {
       const taskRes = await fetch(`https://tasks.googleapis.com/tasks/v1/lists/@default/tasks?showCompleted=false&maxResults=4`, { headers });
       const taskData = await taskRes.json();
-      if (!taskRes.ok) throw new Error(taskData.error ? taskData.error.message : 'Tasks HTTP Error');
+      if (!taskRes.ok) throw new Error(taskData.error ? taskData.error.message : 'Tasks Error');
       todos = taskData.items ? taskData.items : [];
     } catch (err) {
       errors.push("ToDo取得失敗: " + err.message);
     }
 
-    if (errors.length > 0) {
-      setStatus(errors.join("\n"));
-    } else {
-      setStatus("");
-    }
+    setStatus(errors.length > 0 ? errors.join("\n") : "");
     render();
   }
 
@@ -177,6 +164,5 @@
     document.getElementById('clock').innerText = `${d.getMonth()+1}/${d.getDate()} ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
   }, 1000);
 </script>
-<script async defer src="https://accounts.google.com/gsi/client" onload="gisLoaded()"></script>
 </body>
 </html>
